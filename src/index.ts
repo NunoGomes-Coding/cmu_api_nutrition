@@ -1,10 +1,9 @@
 import { Hono } from "hono";
 import { Food } from "./models/food";
 import { connect } from "mongoose";
-import { scaleValue } from "./utils";
+import { extractQuantity, scaleValue } from "./utils";
 
-const DEFAULT_SERVING_SIZE = 100.0;
-const LIMIT = 10;
+const LIMIT_PER_QUERY = 10;
 
 const app = new Hono();
 
@@ -23,10 +22,6 @@ connect(process.env.MONGODB_URI).catch((err) => {
   process.exit(1);
 });
 
-app.get("/ok", (c) => {
-  return c.json("ok");
-});
-
 app.use(async (c, next) => {
   const header = c.req.header("Authorization");
   if (header !== process.env.TOKEN) {
@@ -37,18 +32,19 @@ app.use(async (c, next) => {
 
 app.get("/v1/nutrition", async (c) => {
   try {
-    const query = c.req.query("query");
-    let quantity = parseFloat(
-      c.req.query("quantity") ?? DEFAULT_SERVING_SIZE.toString()
-    );
+    const rawQuery = c.req.query("query");
+    
+    if (!rawQuery || rawQuery.trim() === "") {
+      return c.json({message: "query not provided"}, 400)
+    }
 
-    if (quantity <= 0) quantity = DEFAULT_SERVING_SIZE;
+    const { cleanQuery: query, quantity } = extractQuantity(rawQuery);
 
     if (!query) {
       return c.json({ error: "query parameter is required" }, 400);
     }
 
-    console.log(`Searching for: "${query}"`);
+    console.log(`Searching for: "${query}" with quantity: ${quantity}`);
 
     // Normalize spacing and case
     const searchTerms = query
@@ -63,7 +59,9 @@ app.get("/v1/nutrition", async (c) => {
     );
 
     // Search in the "nome" field
-    const foods = await Food.find({ nome: { $regex: regex } }).limit(LIMIT);
+    const foods = await Food
+      .find({ nome: { $regex: regex } })
+      .limit(LIMIT_PER_QUERY);
 
     if (foods.length === 0) {
       return c.json([]);
@@ -98,19 +96,6 @@ app.get("/v1/nutrition", async (c) => {
       500
     );
   }
-});
-
-app.get("/v1/nutrition/:cod", async (c) => {
-  const cod = c.req.param("cod");
-  
-  if (!Number.isInteger(cod))
-    return c.json({ message: "cod must be an integer" }, 400);
-  
-  const id = parseInt(cod);
-
-  const food = await Food.findOne({ cod: id });
-
-  return c.json(food);
 });
 
 export default app;
